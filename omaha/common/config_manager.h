@@ -26,6 +26,7 @@
 #include <windows.h>
 #include <atlpath.h>
 #include <atlstr.h>
+#include <atltime.h>
 #include <memory>
 #include <vector>
 #include "base/basictypes.h"
@@ -251,6 +252,12 @@ class ConfigManager {
   // %ProgramFiles%/Google/Update
   CString GetMachineGoopdateInstallDir() const;
 
+  // Gets the Google company directory. Does not create the directory if it does
+  // not already exist.
+  // `%LocalAppData%/Google` or `%ProgramFiles%/Google`.
+  CString GetUserCompanyDir() const;
+  CString GetMachineCompanyDir() const;
+
   // Creates and returns a secure directory, %ProgramFiles%/Google/Temp, if
   // running as Admin. Otherwise, returns the %TMP% for the impersonated or
   // current user.
@@ -274,6 +281,9 @@ class ConfigManager {
 
   // Returns the service endpoint where the usage stats requests are sent.
   HRESULT GetUsageStatsReportUrl(CString* url) const;
+
+  // Returns the url base for the app logos.
+  HRESULT GetAppLogoUrl(CString* url) const;
 
 #if defined(HAS_DEVICE_MANAGEMENT)
   // Returns the Device Management API url.
@@ -414,18 +424,20 @@ class ConfigManager {
   bool IsRollbackToTargetVersionAllowed(
       const GUID& app_guid, IPolicyStatusValue** policy_status_value) const;
 
-  // For domain-joined machines, checks the current time against the times that
-  // updates are suppressed. Updates are suppressed if the current time falls
+  // For domain-joined machines, checks the given `time` against the times that
+  // updates are suppressed. Updates are suppressed if the given `time` falls
   // between the start time and the duration.
   // The duration does not account for daylight savings time. For instance, if
   // the start time is 22:00 hours, and with a duration of 8 hours, the updates
   // will be suppressed for 8 hours regardless of whether daylight savings time
   // changes happen in between.
   HRESULT GetUpdatesSuppressedTimes(
+      const CTime& time,
       UpdatesSuppressedTimes* times,
       bool* are_updates_suppressed,
       IPolicyStatusValue** policy_status_value) const;
-  bool AreUpdatesSuppressedNow() const;
+  bool AreUpdatesSuppressedNow(
+      const CTime& now = CTime::GetCurrentTime()) const;
 
   // Returns true if installation of the specified app is allowed.
   bool CanInstallApp(const GUID& app_guid, bool is_machine) const;

@@ -30,6 +30,7 @@
 #include "omaha/base/const_addresses.h"
 #include "omaha/base/debug.h"
 #include "omaha/base/error.h"
+#include "omaha/base/file.h"
 #include "omaha/base/logging.h"
 #include "omaha/base/scope_guard.h"
 #include "omaha/base/string.h"
@@ -46,61 +47,6 @@
 namespace omaha {
 
 namespace {
-
-int MapCSIDLFor64Bit(int csidl) {
-  // We assume, for now, that Omaha will always be deployed in a 32-bit form.
-  // If any 64-bit components (such as the crash handler) need to query paths,
-  // they need to be directed to the 32-bit equivalents.
-
-  switch (csidl) {
-    case CSIDL_PROGRAM_FILES:
-      return CSIDL_PROGRAM_FILESX86;
-    case CSIDL_PROGRAM_FILES_COMMON:
-      return CSIDL_PROGRAM_FILES_COMMONX86;
-    case CSIDL_SYSTEM:
-      return CSIDL_SYSTEMX86;
-    default:
-      return csidl;
-  }
-}
-
-// GetDir32 is named as such because it will always look for 32-bit versions
-// of directories; i.e. on a 64-bit OS, CSIDL_PROGRAM_FILES will return
-// Program Files (x86).  If we need to genuinely find 64-bit locations on
-// 64-bit code in the future, we need to add a GetDir64() which omits the call
-// to MapCSIDLFor64Bit().
-HRESULT GetDir32(int csidl,
-                 const CString& path_tail,
-                 bool create_dir,
-                 CString* dir) {
-  ASSERT1(dir);
-
-#ifdef _WIN64
-  csidl = MapCSIDLFor64Bit(csidl);
-#endif
-
-  CString path;
-  HRESULT hr = GetFolderPath(csidl | CSIDL_FLAG_DONT_VERIFY, &path);
-  if (FAILED(hr)) {
-    CORE_LOG(LW, (_T("GetDir failed to find path][%d][0x%08x]"), csidl, hr));
-    return hr;
-  }
-  if (!::PathAppend(CStrBuf(path, MAX_PATH), path_tail)) {
-    CORE_LOG(LW, (_T("GetDir failed to append path][%s][%s]"),
-        path, path_tail));
-    return GOOPDATE_E_PATH_APPEND_FAILED;
-  }
-  dir->SetString(path);
-
-  // Try to create the directory. Continue if the directory can't be created.
-  if (create_dir) {
-    hr = CreateDir(path, NULL);
-    if (FAILED(hr)) {
-      CORE_LOG(LW, (_T("[GetDir failed to create dir][%s][0x%08x]"), path, hr));
-    }
-  }
-  return S_OK;
-}
 
 // This class aggregates a source/value pair for a single policy value, as well
 // as a conflict-source/conflict-value pair if a conflict exists.
@@ -604,21 +550,11 @@ bool ConfigManager::IsRunningFromUserGoopdateInstallDir() const {
 }
 
 CString ConfigManager::GetUserCrashReportsDir() const {
-  CString path;
-  VERIFY_SUCCEEDED(GetDir32(CSIDL_LOCAL_APPDATA,
-                             CString(OMAHA_REL_CRASH_DIR),
-                             true,
-                             &path));
-  return path;
+  return app_util::GetTempDir();
 }
 
 CString ConfigManager::GetMachineCrashReportsDir() const {
-  CString path;
-  VERIFY_SUCCEEDED(GetDir32(CSIDL_PROGRAM_FILES,
-                             CString(OMAHA_REL_CRASH_DIR),
-                             true,
-                             &path));
-  return path;
+  return GetSecureSystemTempDir();
 }
 
 CString ConfigManager::GetMachineSecureDownloadStorageDir() const {
@@ -854,17 +790,27 @@ CString ConfigManager::GetMachineGoopdateInstallDir() const {
   return path;
 }
 
-CString ConfigManager::GetTempDir() const {
-  if (::IsUserAnAdmin()) {
-    CString path;
-    VERIFY_SUCCEEDED(GetDir32(CSIDL_PROGRAM_FILES,
-                              CString(OMAHA_REL_TEMP_DIR),
-                              true,
-                              &path));
-    return path;
-  }
+CString ConfigManager::GetUserCompanyDir() const {
+  CString path;
+  VERIFY_SUCCEEDED(GetDir32(CSIDL_LOCAL_APPDATA,
+                            CString(OMAHA_REL_COMPANY_DIR),
+                            false,
+                            &path));
+  return path;
+}
 
-  return app_util::GetTempDirForImpersonatedOrCurrentUser();
+CString ConfigManager::GetMachineCompanyDir() const {
+  CString path;
+  VERIFY_SUCCEEDED(GetDir32(CSIDL_PROGRAM_FILES,
+                            CString(OMAHA_REL_COMPANY_DIR),
+                            false,
+                            &path));
+  return path;
+}
+
+CString ConfigManager::GetTempDir() const {
+  return ::IsUserAnAdmin() ? GetSecureSystemTempDir() :
+                             app_util::GetTempDirForImpersonatedOrCurrentUser();
 }
 
 bool ConfigManager::IsRunningFromMachineGoopdateInstallDir() const {
@@ -938,6 +884,20 @@ HRESULT ConfigManager::GetUsageStatsReportUrl(CString* url) const {
   }
 
   *url = kUrlUsageStatsReport;
+  return S_OK;
+}
+
+HRESULT ConfigManager::GetAppLogoUrl(CString* url) const {
+  ASSERT1(url);
+
+  if (SUCCEEDED(RegKey::GetValue(MACHINE_REG_UPDATE_DEV,
+                                 kRegValueNameAppLogoUrl,
+                                 url))) {
+    CORE_LOG(L5, (_T("['app logo url' override %s]"), *url));
+    return S_OK;
+  }
+
+  *url = kUrlAppLogo;
   return S_OK;
 }
 
@@ -1202,7 +1162,7 @@ int ConfigManager::GetLastCheckPeriodSec(
                                          kLastCheckPeriodSec;
   v.UpdateFinal({policy_period_sec}, status_value_minutes);
 
-  OPT_LOG(L5, (_T("[GetLastCheckPeriodSec][%s]"), v.ToString()));
+  OPT_LOG(L5, (_T("[GetLastCheckPeriodMinutes][%s]"), v.ToString()));
 
   return v.value().seconds;
 }
@@ -1727,6 +1687,7 @@ bool ConfigManager::IsRollbackToTargetVersionAllowed(
 }
 
 HRESULT ConfigManager::GetUpdatesSuppressedTimes(
+    const CTime& time,
     UpdatesSuppressedTimes* times,
     bool* are_updates_suppressed,
     IPolicyStatusValue** policy_status_value) const {
@@ -1761,36 +1722,34 @@ HRESULT ConfigManager::GetUpdatesSuppressedTimes(
   }
 
   v.UpdateFinal(UpdatesSuppressedTimes(), policy_status_value);
-
-  CTime now(CTime::GetCurrentTime());
-  tm local = {};
-  now.GetLocalTm(&local);
-
-  // tm_year is relative to 1900. tm_mon is 0-based.
-  CTime start_updates_suppressed(local.tm_year + 1900,
-                                 local.tm_mon + 1,
-                                 local.tm_mday,
-                                 v.value().start_hour,
-                                 v.value().start_min,
-                                 local.tm_sec,
-                                 local.tm_isdst);
-  CTimeSpan duration_updates_suppressed(0, 0, v.value().duration_min, 0);
-  CTime end_updates_suppressed =
-    start_updates_suppressed + duration_updates_suppressed;
-  *are_updates_suppressed = now >= start_updates_suppressed &&
-                            now <= end_updates_suppressed;
-
-  OPT_LOG(L5, (_T("[GetUpdatesSuppressedTimes][%s]"), v.ToString()));
-
   *times = v.value();
+
+  tm local_time = {};
+  time.GetLocalTm(&local_time);
+  int time_diff_minutes =
+      (local_time.tm_hour - v.value().start_hour) * kMinPerHour +
+      (local_time.tm_min - v.value().start_min);
+
+  // Add 24 hours if `time_diff_minutes` is negative.
+  if (time_diff_minutes < 0) {
+    time_diff_minutes += 24 * kMinPerHour;
+  }
+
+  *are_updates_suppressed =
+      time_diff_minutes < static_cast<int>(v.value().duration_min);
+  OPT_LOG(L5, (_T("[GetUpdatesSuppressedTimes][v=%s][time=%s]")
+               _T("[time_diff_minutes=%d][are_updates_suppressed=%d]"),
+               v.ToString(), time.Format(L"%#c"),
+               time_diff_minutes, *are_updates_suppressed));
   return S_OK;
 }
 
-bool ConfigManager::AreUpdatesSuppressedNow() const {
+bool ConfigManager::AreUpdatesSuppressedNow(const CTime& now) const {
   UpdatesSuppressedTimes times;
   bool are_updates_suppressed = false;
 
-  HRESULT hr = GetUpdatesSuppressedTimes(&times,
+  HRESULT hr = GetUpdatesSuppressedTimes(now,
+                                         &times,
                                          &are_updates_suppressed,
                                          NULL);
   return SUCCEEDED(hr) && are_updates_suppressed;

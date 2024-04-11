@@ -45,9 +45,6 @@ const TCHAR* const kAppId1ClientsKeyPathUser =
 const TCHAR* const kGuid1ClientStateKeyPathUser =
     _T("HKCU\\Software\\") PATH_COMPANY_NAME _T("\\")
                            PRODUCT_NAME _T("\\ClientState\\") APP_ID1;
-const TCHAR* const kChromeClientStateKeyPathUser =
-    _T("HKCU\\Software\\") PATH_COMPANY_NAME _T("\\")
-                           PRODUCT_NAME _T("\\ClientState\\") CHROME_APP_ID;
 
 #define APP_ID2 _T("{EF3CACD4-89EB-46b7-B9BF-B16B15F08584}");
 const TCHAR* const kInstallPolicyApp2 = _T("Install") APP_ID2;
@@ -592,7 +589,7 @@ TEST_F(AppInstallTest, PreUpdateCheck_EulaNotAccepted_Offline) {
   app_->PreUpdateCheck(update_request.get());
   EXPECT_EQ(STATE_CHECKING_FOR_UPDATE, app_->state());
   EXPECT_EQ(S_OK, app_->error_code());
-  EXPECT_TRUE(update_request->IsEmpty()) << _T("Should not add request.");
+  EXPECT_FALSE(update_request->IsEmpty()) << _T("Should add request.");
 }
 
 TEST_F(AppAutoUpdateTest, PreUpdateCheck_EulaNotAccepted) {
